@@ -1,14 +1,10 @@
 .data
 prompt:     .asciz "\nEnter angle in degrees: "   # komunikat do użytkownika
-factor:     .word 1144                            # (pi/180) * 2^24 - przelicznik stopni na radiany w formacie fixed-point
+factor:     .word 1144                            # (pi/180) * 2^16 - przelicznik stopni na radiany w formacie fixed-point
 scale:      .word 65536                           # 2^16 (faktyczna skala do normalizacji wyniku)
 to_sincos:  .word 39797                           # początkowa wartość cos(x) = 1.0 w formacie fixed-point
-just_enter: .asciz "\n\n"                         # pusty wiersz (formatowanie)
-y:          .asciz "   y = "                      # etykieta dla y
-x:          .asciz "x = "                         # etykieta dla x
 sin_x:      .asciz "  |  sin(x) = "               # etykieta dla sin(x)
 cos_x:      .asciz "cos(x) = "                    # etykieta dla cos(x)
-ez:         .asciz ". "                           # separator
 atan_array: .word 51472, 30386, 16055, 8150, 4091, 2047, 1024, 512, 256, 128, 64, 32, 16, 8, 4, 2, 1
             # tablica wartości atan(2^-i) w formacie fixed-point (16 wartości)
 
@@ -43,12 +39,12 @@ main:
     li t3, 17                # t3 = liczba iteracji = 16
     li s2, 0                 # s2 = theta = 0 (aktualny kąt)
 
-    lw s3, to_sincos         # s3 = początkowe cos(x) = 1.0 (fixed-point)
-    li s4, 0                 # s4 = początkowe sin(x) = 0.0
+    lw s3, to_sincos         # s3 = początkowe x = 1 (fixed-point)
+    li s4, 0                 # s4 = początkowe y = 0
 
 loop:
     # --- Sprawdzenie zakończenia iteracji ---
-    beq t1, t3, done_1         # jeśli i == 16, zakończ algorytm
+    beq t1, t3, calculate_sincos         # jeśli i == 16, zakończ algorytm
 
     # --- Pobierz atan(2^-i) ---
     slli t4, t1, 2           # t4 = i * 4 (przesunięcie bajtowe)
@@ -58,9 +54,6 @@ loop:
     # --- Przygotuj indeks do przesunięć ---
     addi t1, t1, 1           # zwiększ indeks i
     addi a6, t1, -1          # a6 = i - 1 (potrzebne do obliczeń)
-
-    # --- Debug: Wypisz aktualne wartości ---
-    #jal ra, print_xy         # wywołaj pomocniczą funkcję wypisywania
 
     # --- Porównaj theta z alpha ---
     blt s2, t2, signum       # jeśli theta < alpha, sigma = +1 (idź do signum)
@@ -93,203 +86,128 @@ signum:
     mv s3, s5                # zaktualizuj x
 
     j loop                   # przejdź do następnej iteracji
+    
 
-done_1:
-	
+calculate_sincos:
+    # --- Przelicz wyniki na wartości zmiennoprzecinkowe ---
+    fcvt.s.w fa3, s3         # konwersja x na float
+    fcvt.s.w fa4, s4         # konwersja y na float
+
+    lw a0, scale             # załaduj skalę
+    fcvt.s.w fa1, a0         # konwersja skali na float
+    
+    fdiv.s fa2, fa4, fa1     # normalizacja sin(x)
+    fdiv.s fa0, fa3, fa1     # normalizacja cos(x)
+    
+    j choose_part
+
+choose_part:
+    # -- Określ ćwiartkę kąta na podstawie s0 % 4 --
+    li a0, 4
+    rem a0, s0, a0           # a0 = s0 % 4
+
+    beqz a0, part_1          # jeśli a0 == 0 → I ćwiartka (0°–90°)
+
     li a0, 4
     rem a0, s0, a0
     li a1, 1
-    beq a0, a1, done_2
-  
+    beq a0, a1, part_2       # jeśli a0 == 1 → II ćwiartka (90°–180°)
+
     li a0, 4
     rem a0, s0, a0
     li a1, 2
-    beq a0, a1, done_3
-    
+    beq a0, a1, part_3       # jeśli a0 == 2 → III ćwiartka (180°–270°)
+
     li a0, 4
     rem a0, s0, a0
     li a1, 3
-    beq a0, a1, done_4
-    
-    # --- Przelicz wyniki na wartości zmiennoprzecinkowe ---
-    fcvt.s.w fa3, s3         # konwersja x na float
-    fcvt.s.w fa4, s4         # konwersja y na float
+    beq a0, a1, part_4       # jeśli a0 == 3 → IV ćwiartka (270°–360°)
 
-    lw a0, scale             # załaduj skalę
-    fcvt.s.w fa1, a0         # konwersja skali na float
-
-    # --- Wydrukuj cos(x) ---
-    fdiv.s fa0, fa3, fa1     # normalizacja cos(x)
+part_1:
+    # --- I ćwiartka: cos(+) i sin(+) ---
+    # Wydrukuj tekst "cos(x)"
     li a7, 4
     la a0, cos_x
     ecall
 
-    li a7, 2                 # syscall: wydrukuj float
+    # Wydrukuj wartość cos(x) (już w fa0)
+    li a7, 2                 
     ecall
 
-    # --- Wydrukuj sin(x) ---
-    fdiv.s fa0, fa4, fa1     # normalizacja sin(x)
+    # Wydrukuj tekst "sin(x)"
     li a7, 4
     la a0, sin_x
     ecall
 
-    li a7, 2                 # syscall: wydrukuj float
+    # Przenieś wartość sin(x) z fa2 do fa0 i wydrukuj
+    fmv.s fa0, fa2    
+    li a7, 2               
     ecall
 
-    # --- Zakończ program ---
-    li a7, 10
-    ecall
-    
-done_2:
-    # --- Przelicz wyniki na wartości zmiennoprzecinkowe ---
-    fcvt.s.w fa3, s3         # konwersja x na float
-    fcvt.s.w fa4, s4         # konwersja y na float
-
-    lw a0, scale             # załaduj skalę
-    fcvt.s.w fa1, a0         # konwersja skali na float
-    
-    # --- Wydrukuj sin(x) ---
-    fdiv.s fa0, fa4, fa1     # normalizacja sin(x)
-    fneg.s fa0, fa0
-    
-    li a7, 4
-    la a0, cos_x
-    ecall
-
-    li a7, 2                 # syscall: wydrukuj float
-    ecall
-    # --- Wydrukuj cos(x) ---
-    fdiv.s fa0, fa3, fa1     # normalizacja cos(x) 
-    li a7, 4
-    la a0, sin_x
-    ecall
-
-    li a7, 2                 # syscall: wydrukuj float
-    ecall
-
-    # --- Zakończ program ---
+    # Zakończ program
     li a7, 10
     ecall
 
-done_3:
-    # --- Przelicz wyniki na wartości zmiennoprzecinkowe ---
-    fcvt.s.w fa3, s3         # konwersja x na float
-    fcvt.s.w fa4, s4         # konwersja y na float
+part_2:
+    # --- II ćwiartka: cos(-), sin(+) ---
+    fneg.s fa2, fa2          # odwróć znak sin(x) → sin = -sin
 
-    lw a0, scale             # załaduj skalę
-    fcvt.s.w fa1, a0         # konwersja skali na float
+    # Zamień miejscami fa0 (cos) i fa2 (sin)
+    fmv.s fa3, fa0
+    fmv.s fa0, fa2
+    fmv.s fa2, fa3
 
-    # --- Wydrukuj cos(x) ---
-    fdiv.s fa0, fa3, fa1     # normalizacja cos(x)
-    fneg.s fa0, fa0
-    li a7, 4
-    la a0, cos_x
-    ecall
+    j part_1                 # przejdź do drukowania
 
-    li a7, 2                 # syscall: wydrukuj float
-    ecall
+part_3:
+    # --- III ćwiartka: cos(-), sin(-) ---
+    fneg.s fa2, fa2          # sin = -sin
+    fneg.s fa0, fa0          # cos = -cos
 
-    # --- Wydrukuj sin(x) ---
-    fdiv.s fa0, fa4, fa1     # normalizacja sin(x)
-    fneg.s fa0, fa0
-    li a7, 4
-    la a0, sin_x
-    ecall
+    j part_1                 # przejdź do drukowania
 
-    li a7, 2                 # syscall: wydrukuj float
-    ecall
+part_4:
+    # --- IV ćwiartka: cos(+), sin(-) ---
+    fneg.s fa0, fa0          # cos = -cos
 
-    # --- Zakończ program ---
-    li a7, 10
-    ecall
+    # Zamień miejscami fa0 i fa2 (cos ↔ sin)
+    fmv.s fa3, fa0
+    fmv.s fa0, fa2
+    fmv.s fa2, fa3
 
-
-done_4:
-    # --- Przelicz wyniki na wartości zmiennoprzecinkowe ---
-    fcvt.s.w fa3, s3         # konwersja x na float
-    fcvt.s.w fa4, s4         # konwersja y na float
-
-    lw a0, scale             # załaduj skalę
-    fcvt.s.w fa1, a0         # konwersja skali na float
+    j part_1                 # przejdź do drukowania 
     
-    # --- Wydrukuj sin(x) ---
-    fdiv.s fa0, fa4, fa1     # normalizacja sin(x)   
-    li a7, 4
-    la a0, cos_x
-    ecall
-
-    li a7, 2                 # syscall: wydrukuj float
-    ecall
-    # --- Wydrukuj cos(x) ---
-    fdiv.s fa0, fa3, fa1     # normalizacja cos(x) 
-    fneg.s fa0, fa0
-    li a7, 4
-    la a0, sin_x
-    ecall
-
-    li a7, 2                 # syscall: wydrukuj float
-    ecall
-
-    # --- Zakończ program ---
-    li a7, 10
-    ecall
-    
-    
-print_xy:
-    # --- Funkcja pomocnicza - wypisuje aktualny stan zmiennych ---
-    li a7, 1
-    mv a0, t1           # wypisz numer iteracji (i)
-    ecall
-
-    li a7, 4
-    la a0, ez           # separator ". "
-    ecall
-
-    li a7, 4
-    la a0, x            # etykieta x
-    ecall
-
-    li a7, 1
-    mv a0, s3           # wypisz aktualny x (cos(x))
-    ecall
-
-    li a7, 4
-    la a0, y            # etykieta y
-    ecall
-
-    li a7, 1
-    mv a0, s4           # wypisz aktualny y (sin(x))
-    ecall
-
-    li a7, 4
-    la a0, just_enter   # nowa linia
-    ecall
-
-    # Powrót do miejsca, z którego zostało wywołane jal ra, print_xy
-    jalr zero, 0(ra)
 
 angle_above:
-    neg a0, a0             # a0 = -a0, negujemy wartość (ustalamy dolną granicę jako -|a0|)
+    beq t0, a0, special_angles  # jeśli t0 == a0 (czyli 90), przejdź do specjalnych przypadków
+    bltz t0, angle_below        # jeśli t0 < 0, przejdź do normalizacji w dół
 
-    blt t0, a0, angle_below  # jeśli t0 < -|a0|, przejdź do normalizacji w dół (angle_below)
+    blt t0, a0, main            # jeśli t0 < 90, to kąt jest już w zakresie [0, 90), przejdź do głównego algorytmu
 
-    li a0, 90              # a0 = 90, ustawiamy górną granicę kąta
+    # Jeśli t0 >= 90, wykonujemy normalizację w górę
+    addi t0, t0, -90            # odejmij 90 stopni
+    addi s0, s0, 1              # zwiększ licznik ćwiartek (s0 += 1)
 
-    blt t0, a0, main       # jeśli t0 < 90, to kąt jest już w zakresie [-90, 90), przejdź do main
+    bge t0, a0, angle_above     # jeśli t0 >= 90, kontynuuj pętlę normalizacji
 
-    # Jeśli kąt >= 90, wykonujemy normalizację w górę
-    addi t0, t0, -90       # t0 = t0 - 90 (odejmujemy 90 stopni)
-    addi s0, s0, 1         # s0 = s0 + 1 (zliczamy jeden „obrót” do przodu)
-
-    bgt t0, a0, angle_above  # jeśli nadal t0 > 90, powtarzamy pętlę
-
-    jalr zero, 0(ra)       # return (skok do adresu w ra), zakończ procedurę
+    jalr zero, 0(ra)            # return (powrót z procedury normalizującej)
 
 angle_below:
-    addi t0, t0, 90        # t0 = t0 + 90 (dodajemy 90 stopni)
-    addi s0, s0, 1         # s0 = s0 + 1 (zliczamy jeden „obrót” do tyłu)
+    # --- Normalizacja kąta ujemnego ---
+    li a1, 360                  # a1 = 360 (pełen obrót)
+    neg t0, t0                  # t0 = -t0 (zamiana na dodatni, np. -270 → 270)
+    div a2, t0, a1              # a2 = t0 / 360 (ile pełnych obrotów mieści się w kącie)
+    addi a2, a2, 1              # zaokrąglamy w górę (dodajemy 1)
+    mul a1, a1, a2              # a1 = 360 * a2 (całkowity zakres do dodania)
+    neg t0, t0                  # przywracamy t0 do wartości ujemnej
+    add t0, t0, a1              # dodajemy 360 * a2, aby przenieść kąt do zakresu dodatniego
+    li s1, 1                    # ustaw s1 = 1 (flaga: oryginalny kąt był ujemny)
+    j angle_above               # przejdź do normalizacji w górę
 
-    bltz t0, angle_below  # jeśli nadal t0 < -90, kontynuuj dodawanie
-
-    jalr zero, 0(ra)       # return, zakończ procedurę
-
+special_angles:
+    # --- Obsługa kątów specjalnych: 90, 180, 270, 360 ---
+    li a0, 0                    # a0 = 0 → wartość cos(x) = 0
+    li a1, 1                    # a1 = 1 → wartość sin(x) = 1
+    fcvt.s.w fa0, a0           # fa0 = float(0) → cos(x)
+    fcvt.s.w fa2, a1           # fa2 = float(1) → sin(x)
+    j choose_part              # przejdź do wyboru ćwiartki (uwzględnia s0 i s1)
